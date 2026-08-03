@@ -1,440 +1,701 @@
-// app/dashboard/recetas/nueva/page.js
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Swal from "sweetalert2";
 import { supabase } from "@/lib/supabase";
 
+async function getInitialRecipeData() {
+  const [ingredientsResult, categoriesResult, configResult] = await Promise.all(
+    [
+      supabase
+        .from("ingredients")
+        .select(
+          `
+        id,
+        name,
+        unit,
+        purchase_cost,
+        purchase_quantity,
+        average_unit_cost,
+        current_stock
+      `,
+        )
+        .eq("is_active", true)
+        .order("name"),
+
+      supabase.from("categories").select("id, name, description").order("name"),
+
+      supabase
+        .from("app_config")
+        .select("kwh_cost, oven_power_watts")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ],
+  );
+
+  if (ingredientsResult.error) throw ingredientsResult.error;
+  if (categoriesResult.error) throw categoriesResult.error;
+  if (configResult.error) throw configResult.error;
+
+  return {
+    inventory: ingredientsResult.data ?? [],
+    categories: categoriesResult.data ?? [],
+    config: configResult.data ?? {
+      kwh_cost: 0,
+      oven_power_watts: 0,
+    },
+  };
+}
+
+function money(value) {
+  return Number(value || 0).toLocaleString("es-MX", {
+    style: "currency",
+    currency: "MXN",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function quantity(value) {
+  return Number(value || 0).toLocaleString("es-MX", {
+    maximumFractionDigits: 2,
+  });
+}
+
+function getIngredientUnitCost(ingredient) {
+  if (!ingredient) return 0;
+
+  const averageCost = Number(ingredient.average_unit_cost);
+
+  if (Number.isFinite(averageCost) && averageCost > 0) {
+    return averageCost;
+  }
+
+  const purchaseQuantity = Number(ingredient.purchase_quantity) || 0;
+  const purchaseCost = Number(ingredient.purchase_cost) || 0;
+
+  return purchaseQuantity > 0 ? purchaseCost / purchaseQuantity : 0;
+}
+
 export default function NuevaRecetaPage() {
   const router = useRouter();
 
-  // Catálogo de ingredientes desde la BD
   const [inventory, setInventory] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [config, setConfig] = useState({
+    kwh_cost: 0,
+    oven_power_watts: 0,
+  });
 
-  // Estados generales de la receta
   const [recipeName, setRecipeName] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [ovenTime, setOvenTime] = useState("");
+  const [laborCost, setLaborCost] = useState("");
+  const [recipeIngredients, setRecipeIngredients] = useState([
+    { ingredientId: "", quantityNeeded: "" },
+  ]);
+  const [steps, setSteps] = useState([{ description: "" }]);
 
-  // Ingredientes agregados a la receta
-  const [selectedIngredientId, setSelectedIngredientId] = useState("");
-  const [ingredientQty, setIngredientQty] = useState("");
-  const [recipeIngredients, setRecipeIngredients] = useState([]);
-
-  // Pasos de la receta
-  const [currentStep, setCurrentStep] = useState("");
-  const [steps, setSteps] = useState([]);
-
-  // Costos y configuración
-  const [ovenTime, setOvenTime] = useState(0);
-  const [laborCost, setLaborCost] = useState(0);
-  const [profitMargin, setProfitMargin] = useState(30); // 30% por defecto
-
-  const [kwhCost, setKwhCost] = useState(0);
-  const [loadingInventory, setLoadingInventory] = useState(true);
-
+  const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Cargar inventario y configuración al iniciar
   useEffect(() => {
     let active = true;
 
     async function loadInitialData() {
-      const [inventoryResponse, configResponse] = await Promise.all([
-        supabase.from("ingredients").select("*").order("name"),
-        supabase.from("app_config").select("kwh_cost").limit(1).maybeSingle(),
-      ]);
+      try {
+        const data = await getInitialRecipeData();
 
-      if (!active) return;
+        if (active) {
+          setInventory(data.inventory);
+          setCategories(data.categories);
+          setConfig(data.config);
+        }
+      } catch (error) {
+        console.error("Error al cargar datos:", error);
 
-      if (inventoryResponse.error) {
-        void Swal.fire({
-          icon: "error",
-          title: "No se pudo cargar el inventario",
-          text: inventoryResponse.error.message,
-          confirmButtonColor: "#8b5e3c",
-        });
-      } else {
-        setInventory(inventoryResponse.data ?? []);
+        if (active) {
+          await Swal.fire({
+            icon: "error",
+            title: "No se pudo preparar la receta",
+            text: error.message,
+            confirmButtonColor: "#8b5e3c",
+          });
+        }
+      } finally {
+        if (active) setLoading(false);
       }
-
-      if (!configResponse.error) {
-        setKwhCost(Number(configResponse.data?.kwh_cost) || 0);
-      }
-
-      setLoadingInventory(false);
     }
 
     void loadInitialData();
-    return () => { active = false; };
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // --- LÓGICA DE INGREDIENTES ---
-  const addIngredient = () => {
-    const parsedQuantity = Number(ingredientQty);
-    if (!selectedIngredientId || !Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
-      void Swal.fire({ icon: "warning", title: "Cantidad inválida", text: "Selecciona un insumo e ingresa una cantidad mayor que cero.", confirmButtonColor: "#8b5e3c" });
-      return;
-    }
+  const ingredientCosts = useMemo(() => {
+    return recipeIngredients.map((row) => {
+      const ingredient = inventory.find((item) => item.id === row.ingredientId);
+      const quantityNeeded = Number(row.quantityNeeded) || 0;
+      const unitCost = getIngredientUnitCost(ingredient);
 
-    const ingredient = inventory.find((i) => String(i.id) === String(selectedIngredientId));
-    if (!ingredient) return;
+      return {
+        ingredient,
+        quantityNeeded,
+        cost: unitCost * quantityNeeded,
+      };
+    });
+  }, [inventory, recipeIngredients]);
 
-    if (recipeIngredients.some((item) => String(item.id) === String(ingredient.id))) {
-      void Swal.fire({ icon: "info", title: "Insumo repetido", text: "Ese insumo ya está agregado a la receta.", confirmButtonColor: "#8b5e3c" });
-      return;
-    }
-    const unitCost = ingredient.purchase_cost / ingredient.purchase_quantity;
-    const totalCost = unitCost * parsedQuantity;
+  const ingredientTotal = ingredientCosts.reduce(
+    (total, item) => total + item.cost,
+    0,
+  );
 
-    setRecipeIngredients([
-      ...recipeIngredients,
-      {
-        ...ingredient,
-        quantityUsed: parsedQuantity,
-        calculatedCost: totalCost,
-      },
+  const electricityCost =
+    (Number(config.oven_power_watts || 0) / 1000) *
+    (Number(ovenTime || 0) / 60) *
+    Number(config.kwh_cost || 0);
+
+  const parsedLaborCost = Number(laborCost || 0);
+  const totalCost = ingredientTotal + electricityCost + parsedLaborCost;
+
+  const updateIngredientRow = (index, field, value) => {
+    setRecipeIngredients((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [field]: value } : row,
+      ),
+    );
+  };
+
+  const addIngredientRow = () => {
+    setRecipeIngredients((current) => [
+      ...current,
+      { ingredientId: "", quantityNeeded: "" },
     ]);
-
-    setSelectedIngredientId("");
-    setIngredientQty("");
   };
 
-  const removeIngredient = (index) => {
-    const newIngredients = [...recipeIngredients];
-    newIngredients.splice(index, 1);
-    setRecipeIngredients(newIngredients);
+  const removeIngredientRow = (index) => {
+    setRecipeIngredients((current) => {
+      if (current.length === 1) {
+        return [{ ingredientId: "", quantityNeeded: "" }];
+      }
+
+      return current.filter((_, rowIndex) => rowIndex !== index);
+    });
   };
 
-  // --- LÓGICA DE PASOS ---
+  const updateStep = (index, value) => {
+    setSteps((current) =>
+      current.map((step, stepIndex) =>
+        stepIndex === index ? { description: value } : step,
+      ),
+    );
+  };
+
   const addStep = () => {
-    if (!currentStep.trim()) return;
-    setSteps([...steps, currentStep]);
-    setCurrentStep("");
+    setSteps((current) => [...current, { description: "" }]);
   };
 
   const removeStep = (index) => {
-    const newSteps = [...steps];
-    newSteps.splice(index, 1);
-    setSteps(newSteps);
+    setSteps((current) => {
+      if (current.length === 1) return [{ description: "" }];
+      return current.filter((_, stepIndex) => stepIndex !== index);
+    });
   };
 
-  // --- CÁLCULOS EN TIEMPO REAL ---
-  const insumosTotal = recipeIngredients.reduce(
-    (sum, item) => sum + item.calculatedCost,
-    0,
-  );
-  const lightTotal = (parseFloat(ovenTime || 0) / 60) * kwhCost;
-  const productionCost = insumosTotal + lightTotal + parseFloat(laborCost || 0);
-  const suggestedPrice =
-    productionCost + productionCost * (parseFloat(profitMargin || 0) / 100);
+  const moveStep = (index, direction) => {
+    setSteps((current) => {
+      const destination = index + direction;
 
-  // --- GUARDAR RECETA EN BASE DE DATOS ---
-  const handleSaveRecipe = async () => {
-    if (!recipeName || recipeIngredients.length === 0) {
-      await Swal.fire({ icon: "warning", title: "Receta incompleta", text: "Escribe el nombre y agrega al menos un ingrediente.", confirmButtonColor: "#8b5e3c" });
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      // 1. Guardar la receta principal
-      const { data: recipeData, error: recipeError } = await supabase
-        .from("recipes")
-        .insert([
-          {
-            name: recipeName,
-            labor_cost: parseFloat(laborCost || 0),
-            profit_margin_percent: parseFloat(profitMargin || 0),
-            oven_time_minutes: parseInt(ovenTime || 0),
-          },
-        ])
-        .select()
-        .single();
-
-      if (recipeError) throw recipeError;
-
-      // 2. Guardar los ingredientes relacionados
-      const ingredientsToInsert = recipeIngredients.map((ing) => ({
-        recipe_id: recipeData.id,
-        ingredient_id: ing.id,
-        quantity_needed: ing.quantityUsed,
-      }));
-
-      const { error: ingredientsError } = await supabase
-        .from("recipe_ingredients")
-        .insert(ingredientsToInsert);
-
-      if (ingredientsError) throw ingredientsError;
-
-      // 3. Guardar los pasos
-      if (steps.length > 0) {
-        const stepsToInsert = steps.map((stepDesc, index) => ({
-          recipe_id: recipeData.id,
-          step_number: index + 1,
-          description: stepDesc,
-        }));
-
-        const { error: stepsError } = await supabase
-          .from("recipe_steps")
-          .insert(stepsToInsert);
-
-        if (stepsError) throw stepsError;
+      if (destination < 0 || destination >= current.length) {
+        return current;
       }
 
-      await Swal.fire({ icon: "success", title: "Receta guardada", text: "La receta se registró correctamente.", timer: 1600, showConfirmButton: false });
-      router.push("/dashboard/recetas");
+      const copy = [...current];
+      [copy[index], copy[destination]] = [copy[destination], copy[index]];
+      return copy;
+    });
+  };
+
+  const validateRecipe = async () => {
+    if (!recipeName.trim()) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Nombre requerido",
+        text: "Escribe el nombre de la receta.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    if (!categoryId) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Categoría requerida",
+        text: "Selecciona si la receta es un rol, brownie, galleta u otra categoría.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    const normalizedIngredients = recipeIngredients.filter(
+      (row) => row.ingredientId || String(row.quantityNeeded).trim(),
+    );
+
+    if (normalizedIngredients.length === 0) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Faltan ingredientes",
+        text: "Agrega al menos un ingrediente a la receta.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    const invalidIngredient = normalizedIngredients.find(
+      (row) =>
+        !row.ingredientId ||
+        !Number.isFinite(Number(row.quantityNeeded)) ||
+        Number(row.quantityNeeded) <= 0,
+    );
+
+    if (invalidIngredient) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Ingrediente incompleto",
+        text: "Selecciona cada ingrediente y escribe una cantidad mayor que cero.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    const ids = normalizedIngredients.map((row) => row.ingredientId);
+    const hasDuplicates = new Set(ids).size !== ids.length;
+
+    if (hasDuplicates) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Ingrediente repetido",
+        text: "Cada ingrediente debe aparecer una sola vez en la receta.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    if (!Number.isFinite(Number(ovenTime || 0)) || Number(ovenTime || 0) < 0) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Tiempo inválido",
+        text: "El tiempo de horno no puede ser negativo.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    if (
+      !Number.isFinite(Number(laborCost || 0)) ||
+      Number(laborCost || 0) < 0
+    ) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Costo inválido",
+        text: "La mano de obra no puede ser negativa.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleSave = async () => {
+    const valid = await validateRecipe();
+    if (!valid) return;
+
+    const ingredientsPayload = recipeIngredients
+      .filter((row) => row.ingredientId)
+      .map((row) => ({
+        ingredient_id: row.ingredientId,
+        quantity_needed: Number(row.quantityNeeded),
+      }));
+
+    const stepsPayload = steps
+      .map((step) => ({ description: step.description.trim() }))
+      .filter((step) => step.description);
+
+    try {
+      setIsSubmitting(true);
+
+      const { data, error } = await supabase.rpc("create_recipe_with_details", {
+        p_name: recipeName.trim(),
+        p_category_id: categoryId,
+        p_labor_cost: Number(laborCost || 0),
+        p_oven_time_minutes: Math.trunc(Number(ovenTime || 0)),
+        p_ingredients: ingredientsPayload,
+        p_steps: stepsPayload,
+      });
+
+      if (error) throw error;
+
+      await Swal.fire({
+        icon: "success",
+        title: "Receta guardada",
+        text: "La receta y todos sus detalles se registraron correctamente.",
+        timer: 1600,
+        showConfirmButton: false,
+      });
+
+      router.push(`/dashboard/recetas/${data}`);
     } catch (error) {
-      await Swal.fire({ icon: "error", title: "No se pudo guardar", text: error.message, confirmButtonColor: "#8b5e3c" });
+      console.error("Error al guardar receta:", error);
+      await Swal.fire({
+        icon: "error",
+        title: "No se pudo guardar",
+        text: error.message,
+        confirmButtonColor: "#8b5e3c",
+      });
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-stone-200 bg-white py-20 text-center text-stone-500 shadow-sm">
+        Cargando ingredientes y categorías...
+      </div>
+    );
+  }
+
   return (
-    <div className="mx-auto max-w-7xl pb-10">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-3xl font-black tracking-tight text-stone-900">
-          📝 Crear Nueva Receta
-        </h2>
+    <div className="mx-auto max-w-7xl space-y-7 pb-10">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="mb-3 text-sm font-bold text-stone-500 transition hover:text-stone-900"
+          >
+            ← Volver
+          </button>
+          <p className="text-xs font-black uppercase tracking-[.16em] text-orange-700">
+            Recetario
+          </p>
+          <h1 className="mt-1 text-3xl font-black tracking-tight text-stone-900">
+            Nueva receta
+          </h1>
+        </div>
+
         <button
-          onClick={handleSaveRecipe}
+          type="button"
+          onClick={handleSave}
           disabled={isSubmitting}
-          className="rounded-xl bg-[#8b5e3c] px-6 py-3 font-black text-white shadow-lg shadow-orange-900/10 transition hover:bg-[#70472d] disabled:opacity-50"
+          className="rounded-xl bg-[#8b5e3c] px-6 py-3 text-sm font-black text-white shadow-md shadow-stone-900/10 transition hover:bg-[#70472d] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isSubmitting ? "Guardando..." : "💾 Guardar Receta"}
+          {isSubmitting ? "Guardando..." : "Guardar receta"}
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* COLUMNA IZQUIERDA: Formulario */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Nombre de la Receta */}
-          <div className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
-            <label className="block text-sm font-bold text-gray-700 mb-2">
-              Nombre de la Receta
-            </label>
-            <input
-              type="text"
-              value={recipeName}
-              onChange={(e) => setRecipeName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="Ej. Galletas de Chispas de Chocolate"
-            />
-          </div>
+      <div className="grid gap-7 xl:grid-cols-[1.45fr_0.75fr]">
+        <div className="space-y-7">
+          <section className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
+            <h2 className="text-xl font-black text-stone-900">
+              Información general
+            </h2>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="md:col-span-2">
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Nombre de la receta
+                </span>
+                <input
+                  type="text"
+                  value={recipeName}
+                  onChange={(event) => setRecipeName(event.target.value)}
+                  placeholder="Ej. Brownies de chocolate"
+                  className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                />
+              </label>
 
-          {/* Ingredientes */}
-          <div className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-bold text-gray-800 mb-4">
-              🛒 Ingredientes
-            </h3>
-
-            <div className="flex gap-2 mb-4 items-end">
-              <div className="flex-1">
-                <label className="block text-sm text-gray-600 mb-1">
-                  Insumo
-                </label>
+              <label>
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Categoría
+                </span>
                 <select
-                  value={selectedIngredientId}
-                  onChange={(e) => setSelectedIngredientId(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  value={categoryId}
+                  onChange={(event) => setCategoryId(event.target.value)}
+                  className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
                 >
-                  <option value="">{loadingInventory ? "Cargando insumos..." : "Selecciona un insumo..."}</option>
-                  {inventory.map((inv) => (
-                    <option key={inv.id} value={inv.id}>
-                      {inv.name} (en {inv.unit})
+                  <option value="">Selecciona una categoría</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className="w-32">
-                <label className="block text-sm text-gray-600 mb-1">
-                  Cantidad
-                </label>
-                <input
-                  type="number"
-                  value={ingredientQty}
-                  onChange={(e) => setIngredientQty(e.target.value)}
-                  placeholder="Ej. 250"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                {categories.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-700">
+                    Primero agrega categorías desde Configuración.
+                  </p>
+                )}
+              </label>
+
+              <label>
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Tiempo total de horno
+                </span>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={ovenTime}
+                    onChange={(event) => setOvenTime(event.target.value)}
+                    placeholder="45"
+                    className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
+                    min
+                  </span>
+                </div>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Mano de obra
+                </span>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={laborCost}
+                    onChange={(event) => setLaborCost(event.target.value)}
+                    placeholder="80.00"
+                    className="w-full rounded-xl border border-stone-300 bg-stone-50 py-3 pl-9 pr-4 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                  />
+                </div>
+              </label>
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-stone-100 p-6">
+              <div>
+                <h2 className="text-xl font-black text-stone-900">
+                  Ingredientes
+                </h2>
+                <p className="mt-1 text-sm text-stone-500">
+                  Puedes cambiar el insumo y la cantidad directamente en cada
+                  fila.
+                </p>
               </div>
               <button
-                onClick={addIngredient}
                 type="button"
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 h-[42px]"
+                onClick={addIngredientRow}
+                className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-black text-orange-800 transition hover:bg-orange-100"
               >
-                Agregar
+                + Agregar fila
               </button>
             </div>
 
-            {/* Lista de ingredientes agregados */}
-            <div className="space-y-2 mt-4">
-              {recipeIngredients.map((ing, idx) => (
-                <div
-                  key={idx}
-                  className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-100"
-                >
-                  <span className="font-medium text-gray-700">
-                    {ing.quantityUsed} {ing.unit} de {ing.name}
-                  </span>
-                  <div className="flex items-center gap-4">
-                    <span className="text-gray-600 font-medium">
-                      ${ing.calculatedCost.toFixed(2)}
-                    </span>
+            <div className="space-y-4 p-6">
+              {recipeIngredients.map((row, index) => {
+                const costItem = ingredientCosts[index];
+                const selectedIngredient = costItem?.ingredient;
+
+                return (
+                  <div
+                    key={index}
+                    className="grid gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4 md:grid-cols-[1fr_180px_130px_auto] md:items-end"
+                  >
+                    <label>
+                      <span className="mb-2 block text-xs font-black uppercase tracking-wider text-stone-500">
+                        Insumo
+                      </span>
+                      <select
+                        value={row.ingredientId}
+                        onChange={(event) =>
+                          updateIngredientRow(
+                            index,
+                            "ingredientId",
+                            event.target.value,
+                          )
+                        }
+                        className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                      >
+                        <option value="">Selecciona un ingrediente</option>
+                        {inventory.map((ingredient) => (
+                          <option key={ingredient.id} value={ingredient.id}>
+                            {ingredient.name} ·{" "}
+                            {quantity(ingredient.current_stock)}{" "}
+                            {ingredient.unit} disponibles
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      <span className="mb-2 block text-xs font-black uppercase tracking-wider text-stone-500">
+                        Cantidad
+                      </span>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={row.quantityNeeded}
+                          onChange={(event) =>
+                            updateIngredientRow(
+                              index,
+                              "quantityNeeded",
+                              event.target.value,
+                            )
+                          }
+                          className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 pr-14 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                        />
+                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-black text-stone-400">
+                          {selectedIngredient?.unit || "—"}
+                        </span>
+                      </div>
+                    </label>
+
+                    <div>
+                      <span className="mb-2 block text-xs font-black uppercase tracking-wider text-stone-500">
+                        Costo
+                      </span>
+                      <div className="rounded-xl border border-stone-200 bg-white px-4 py-3 text-right font-black text-stone-800">
+                        {money(costItem?.cost)}
+                      </div>
+                    </div>
+
                     <button
-                      onClick={() => removeIngredient(idx)}
-                      className="text-red-500 hover:text-red-700 font-bold"
+                      type="button"
+                      onClick={() => removeIngredientRow(index)}
+                      className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-black text-red-700 transition hover:bg-red-100"
                     >
-                      X
+                      Quitar
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-stone-100 p-6">
+              <div>
+                <h2 className="text-xl font-black text-stone-900">
+                  Pasos de preparación
+                </h2>
+                <p className="mt-1 text-sm text-stone-500">
+                  Agrega, modifica, elimina o cambia el orden de los pasos.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={addStep}
+                className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-black text-orange-800 transition hover:bg-orange-100"
+              >
+                + Agregar paso
+              </button>
+            </div>
+
+            <div className="space-y-4 p-6">
+              {steps.map((step, index) => (
+                <div
+                  key={index}
+                  className="flex gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#3b2a20] font-black text-white">
+                    {index + 1}
+                  </span>
+
+                  <textarea
+                    value={step.description}
+                    onChange={(event) => updateStep(index, event.target.value)}
+                    rows={3}
+                    placeholder="Describe este paso..."
+                    className="min-h-24 flex-1 resize-y rounded-xl border border-stone-300 bg-white px-4 py-3 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                  />
+
+                  <div className="flex shrink-0 flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => moveStep(index, -1)}
+                      disabled={index === 0}
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-700 disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveStep(index, 1)}
+                      disabled={index === steps.length - 1}
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-700 disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeStep(index)}
+                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700"
+                    >
+                      ✕
                     </button>
                   </div>
                 </div>
               ))}
-              {recipeIngredients.length === 0 && (
-                <p className="text-sm text-gray-400 italic">
-                  No hay ingredientes agregados aún.
-                </p>
-              )}
             </div>
-          </div>
+          </section>
+        </div>
 
-          {/* Pasos */}
-          <div className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-bold text-gray-800 mb-4">
-              📖 Pasos de preparación
-            </h3>
-
-            <div className="flex gap-2 mb-4 items-end">
-              <div className="flex-1">
-                <label className="block text-sm text-gray-600 mb-1">
-                  Descripción del paso
-                </label>
-                <input
-                  type="text"
-                  value={currentStep}
-                  onChange={(e) => setCurrentStep(e.target.value)}
-                  placeholder="Ej. Precalentar el horno a 180 grados..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-                  onKeyDown={(e) => e.key === "Enter" && addStep()}
-                />
-              </div>
-              <button
-                onClick={addStep}
-                type="button"
-                className="bg-gray-800 text-white px-4 py-2 rounded-lg font-medium hover:bg-gray-900 h-[42px]"
-              >
-                + Paso
-              </button>
+        <aside>
+          <div className="sticky top-28 overflow-hidden rounded-2xl bg-[#3b2a20] text-white shadow-xl">
+            <div className="border-b border-white/10 p-6">
+              <p className="text-xs font-black uppercase tracking-[.16em] text-orange-200">
+                Cálculo actual
+              </p>
+              <h2 className="mt-2 text-xl font-black">Costo de la receta</h2>
             </div>
 
-            <div className="space-y-2">
-              {steps.map((step, idx) => (
-                <div
-                  key={idx}
-                  className="flex justify-between items-start bg-blue-50 p-3 rounded-lg border border-blue-100"
-                >
-                  <p className="text-sm text-gray-800">
-                    <strong className="mr-2">Paso {idx + 1}:</strong> {step}
-                  </p>
-                  <button
-                    onClick={() => removeStep(idx)}
-                    className="text-red-500 hover:text-red-700 font-bold ml-4"
-                  >
-                    X
-                  </button>
+            <div className="space-y-4 p-6 text-sm">
+              <CostRow label="Ingredientes" value={money(ingredientTotal)} />
+              <CostRow label="Electricidad" value={money(electricityCost)} />
+              <CostRow label="Mano de obra" value={money(parsedLaborCost)} />
+
+              <div className="border-t border-white/15 pt-4">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="font-black text-white">Costo total</span>
+                  <span className="text-2xl font-black text-orange-200">
+                    {money(totalCost)}
+                  </span>
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* COLUMNA DERECHA: Cálculos y Resumen */}
-        <div className="space-y-6">
-          <div className="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-bold text-gray-800 mb-4">
-              ⚙️ Costos Extra
-            </h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Tiempo de Horno (Minutos)
-                </label>
-                <input
-                  type="number"
-                  value={ovenTime}
-                  onChange={(e) => setOvenTime(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-                />
               </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Tu Mano de Obra ($)
-                </label>
-                <input
-                  type="number"
-                  value={laborCost}
-                  onChange={(e) => setLaborCost(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">
-                  Margen de Ganancia (%)
-                </label>
-                <input
-                  type="number"
-                  value={profitMargin}
-                  onChange={(e) => setProfitMargin(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
-                />
+
+              <div className="rounded-xl bg-white/10 p-4 text-xs leading-5 text-stone-200">
+                La electricidad se calcula con la potencia del horno y el costo
+                por kWh configurados en el sistema.
               </div>
             </div>
           </div>
-
-          {/* TARJETA DE RESUMEN TOTAL */}
-          <div className="rounded-2xl bg-[#3b2a20] p-6 text-white shadow-xl">
-            <h3 className="text-lg font-bold border-b border-gray-600 pb-2 mb-4">
-              💰 Resumen de Costos
-            </h3>
-
-            <div className="space-y-2 text-sm mb-6">
-              <div className="flex justify-between">
-                <span className="text-gray-300">Total en Insumos:</span>
-                <span className="font-medium">${insumosTotal.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-300">Gasto de Luz (Horno):</span>
-                <span className="font-medium">${lightTotal.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-300">Mano de Obra:</span>
-                <span className="font-medium">
-                  ${parseFloat(laborCost || 0).toFixed(2)}
-                </span>
-              </div>
-              <div className="flex justify-between pt-2 border-t border-gray-600 mt-2">
-                <span className="font-bold text-gray-200">
-                  Costo de Producción:
-                </span>
-                <span className="font-bold text-yellow-400">
-                  ${productionCost.toFixed(2)}
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-green-500 bg-opacity-20 p-4 rounded-lg border border-green-500 text-center">
-              <p className="text-green-300 text-sm mb-1">
-                Precio Sugerido de Venta
-              </p>
-              <p className="text-3xl font-black text-white">
-                ${suggestedPrice.toFixed(2)}
-              </p>
-            </div>
-          </div>
-        </div>
+        </aside>
       </div>
+    </div>
+  );
+}
+
+function CostRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-stone-300">{label}</span>
+      <span className="font-black text-white">{value}</span>
     </div>
   );
 }
