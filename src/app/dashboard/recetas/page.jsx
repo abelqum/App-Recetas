@@ -535,7 +535,7 @@ export default function RecetasPage() {
                     href={`/dashboard/recetas/${recipe.id}`}
                     className="col-span-2 rounded-2xl bg-[#3b2a20] px-4 py-3 text-center text-sm font-black text-white transition hover:bg-[#4d382a]"
                   >
-                    Ver, editar y producir
+                    Ver receta
                   </Link>
 
                   <Link
