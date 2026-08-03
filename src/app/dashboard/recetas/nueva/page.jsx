@@ -28,7 +28,9 @@ async function getInitialRecipeData() {
 
       supabase
         .from("app_config")
-        .select("kwh_cost, oven_power_watts")
+        .select(
+          "kwh_cost, electric_power_watts, oven_power_watts, gas_hourly_cost",
+        )
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
@@ -39,12 +41,18 @@ async function getInitialRecipeData() {
   if (categoriesResult.error) throw categoriesResult.error;
   if (configResult.error) throw configResult.error;
 
+  const config = configResult.data ?? {};
+
   return {
     inventory: ingredientsResult.data ?? [],
     categories: categoriesResult.data ?? [],
-    config: configResult.data ?? {
-      kwh_cost: 0,
-      oven_power_watts: 0,
+    config: {
+      kwhCost: Number(config.kwh_cost) || 0,
+      electricPowerWatts:
+        Number(config.electric_power_watts) ||
+        Number(config.oven_power_watts) ||
+        0,
+      gasHourlyCost: Number(config.gas_hourly_cost) || 0,
     },
   };
 }
@@ -54,12 +62,6 @@ function money(value) {
     style: "currency",
     currency: "MXN",
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function quantity(value) {
-  return Number(value || 0).toLocaleString("es-MX", {
     maximumFractionDigits: 2,
   });
 }
@@ -85,19 +87,23 @@ export default function NuevaRecetaPage() {
   const [inventory, setInventory] = useState([]);
   const [categories, setCategories] = useState([]);
   const [config, setConfig] = useState({
-    kwh_cost: 0,
-    oven_power_watts: 0,
+    kwhCost: 0,
+    electricPowerWatts: 0,
+    gasHourlyCost: 0,
   });
 
   const [recipeName, setRecipeName] = useState("");
   const [categoryId, setCategoryId] = useState("");
-  const [ovenTime, setOvenTime] = useState("");
+  const [electricTimeMinutes, setElectricTimeMinutes] = useState("0");
+  const [gasTimeMinutes, setGasTimeMinutes] = useState("0");
   const [laborCost, setLaborCost] = useState("");
+  const [profitMarginPercent, setProfitMarginPercent] = useState("30");
+
   const [recipeIngredients, setRecipeIngredients] = useState([
     { ingredientId: "", quantityNeeded: "" },
   ]);
-  const [steps, setSteps] = useState([{ description: "" }]);
 
+  const [steps, setSteps] = useState([{ description: "" }]);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -108,11 +114,11 @@ export default function NuevaRecetaPage() {
       try {
         const data = await getInitialRecipeData();
 
-        if (active) {
-          setInventory(data.inventory);
-          setCategories(data.categories);
-          setConfig(data.config);
-        }
+        if (!active) return;
+
+        setInventory(data.inventory);
+        setCategories(data.categories);
+        setConfig(data.config);
       } catch (error) {
         console.error("Error al cargar datos:", error);
 
@@ -120,7 +126,7 @@ export default function NuevaRecetaPage() {
           await Swal.fire({
             icon: "error",
             title: "No se pudo preparar la receta",
-            text: error.message,
+            text: error?.message || "Ocurrió un error al cargar los datos.",
             confirmButtonColor: "#8b5e3c",
           });
         }
@@ -139,6 +145,7 @@ export default function NuevaRecetaPage() {
   const ingredientCosts = useMemo(() => {
     return recipeIngredients.map((row) => {
       const ingredient = inventory.find((item) => item.id === row.ingredientId);
+
       const quantityNeeded = Number(row.quantityNeeded) || 0;
       const unitCost = getIngredientUnitCost(ingredient);
 
@@ -150,18 +157,48 @@ export default function NuevaRecetaPage() {
     });
   }, [inventory, recipeIngredients]);
 
-  const ingredientTotal = ingredientCosts.reduce(
-    (total, item) => total + item.cost,
-    0,
-  );
+  const calculations = useMemo(() => {
+    const ingredientTotal = ingredientCosts.reduce(
+      (total, item) => total + item.cost,
+      0,
+    );
 
-  const electricityCost =
-    (Number(config.oven_power_watts || 0) / 1000) *
-    (Number(ovenTime || 0) / 60) *
-    Number(config.kwh_cost || 0);
+    const electricMinutes = Number(electricTimeMinutes) || 0;
+    const gasMinutes = Number(gasTimeMinutes) || 0;
 
-  const parsedLaborCost = Number(laborCost || 0);
-  const totalCost = ingredientTotal + electricityCost + parsedLaborCost;
+    const electricCost =
+      (config.electricPowerWatts / 1000) *
+      (electricMinutes / 60) *
+      config.kwhCost;
+
+    const gasCost = (gasMinutes / 60) * config.gasHourlyCost;
+    const parsedLaborCost = Number(laborCost) || 0;
+    const parsedProfitMargin = Number(profitMarginPercent) || 0;
+
+    const totalCost =
+      ingredientTotal + electricCost + gasCost + parsedLaborCost;
+
+    const profitAmount = totalCost * (parsedProfitMargin / 100);
+    const finalPrice = totalCost + profitAmount;
+
+    return {
+      ingredientTotal,
+      electricCost,
+      gasCost,
+      laborCost: parsedLaborCost,
+      profitPercent: parsedProfitMargin,
+      totalCost,
+      profitAmount,
+      finalPrice,
+    };
+  }, [
+    config,
+    electricTimeMinutes,
+    gasTimeMinutes,
+    ingredientCosts,
+    laborCost,
+    profitMarginPercent,
+  ]);
 
   const updateIngredientRow = (index, field, value) => {
     setRecipeIngredients((current) =>
@@ -236,7 +273,7 @@ export default function NuevaRecetaPage() {
       await Swal.fire({
         icon: "warning",
         title: "Categoría requerida",
-        text: "Selecciona si la receta es un rol, brownie, galleta u otra categoría.",
+        text: "Selecciona la categoría de la receta.",
         confirmButtonColor: "#8b5e3c",
       });
       return false;
@@ -250,7 +287,7 @@ export default function NuevaRecetaPage() {
       await Swal.fire({
         icon: "warning",
         title: "Faltan ingredientes",
-        text: "Agrega al menos un ingrediente a la receta.",
+        text: "Agrega al menos un ingrediente.",
         confirmButtonColor: "#8b5e3c",
       });
       return false;
@@ -274,23 +311,35 @@ export default function NuevaRecetaPage() {
     }
 
     const ids = normalizedIngredients.map((row) => row.ingredientId);
-    const hasDuplicates = new Set(ids).size !== ids.length;
 
-    if (hasDuplicates) {
+    if (new Set(ids).size !== ids.length) {
       await Swal.fire({
         icon: "warning",
         title: "Ingrediente repetido",
-        text: "Cada ingrediente debe aparecer una sola vez en la receta.",
+        text: "Cada ingrediente debe aparecer una sola vez.",
         confirmButtonColor: "#8b5e3c",
       });
       return false;
     }
 
-    if (!Number.isFinite(Number(ovenTime || 0)) || Number(ovenTime || 0) < 0) {
+    const electricMinutes = Number(electricTimeMinutes || 0);
+    const gasMinutes = Number(gasTimeMinutes || 0);
+
+    if (!Number.isFinite(electricMinutes) || electricMinutes < 0) {
       await Swal.fire({
         icon: "warning",
-        title: "Tiempo inválido",
-        text: "El tiempo de horno no puede ser negativo.",
+        title: "Minutos de electricidad inválidos",
+        text: "Los minutos de electricidad deben ser iguales o mayores que cero.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    if (!Number.isFinite(gasMinutes) || gasMinutes < 0) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Minutos de gas inválidos",
+        text: "Los minutos de gas deben ser iguales o mayores que cero.",
         confirmButtonColor: "#8b5e3c",
       });
       return false;
@@ -304,6 +353,18 @@ export default function NuevaRecetaPage() {
         icon: "warning",
         title: "Costo inválido",
         text: "La mano de obra no puede ser negativa.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return false;
+    }
+
+    const profit = Number(profitMarginPercent || 0);
+
+    if (!Number.isFinite(profit) || profit < 0 || profit > 999.99) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Utilidad inválida",
+        text: "El porcentaje de utilidad debe estar entre 0 y 999.99.",
         confirmButtonColor: "#8b5e3c",
       });
       return false;
@@ -334,7 +395,9 @@ export default function NuevaRecetaPage() {
         p_name: recipeName.trim(),
         p_category_id: categoryId,
         p_labor_cost: Number(laborCost || 0),
-        p_oven_time_minutes: Math.trunc(Number(ovenTime || 0)),
+        p_profit_margin_percent: Number(profitMarginPercent || 0),
+        p_electric_time_minutes: Math.trunc(Number(electricTimeMinutes || 0)),
+        p_gas_time_minutes: Math.trunc(Number(gasTimeMinutes || 0)),
         p_ingredients: ingredientsPayload,
         p_steps: stepsPayload,
       });
@@ -344,7 +407,7 @@ export default function NuevaRecetaPage() {
       await Swal.fire({
         icon: "success",
         title: "Receta guardada",
-        text: "La receta y todos sus detalles se registraron correctamente.",
+        text: "La receta se registró correctamente.",
         timer: 1600,
         showConfirmButton: false,
       });
@@ -352,10 +415,11 @@ export default function NuevaRecetaPage() {
       router.push(`/dashboard/recetas/${data}`);
     } catch (error) {
       console.error("Error al guardar receta:", error);
+
       await Swal.fire({
         icon: "error",
         title: "No se pudo guardar",
-        text: error.message,
+        text: error?.message || "Ocurrió un error al guardar la receta.",
         confirmButtonColor: "#8b5e3c",
       });
     } finally {
@@ -382,9 +446,11 @@ export default function NuevaRecetaPage() {
           >
             ← Volver
           </button>
+
           <p className="text-xs font-black uppercase tracking-[.16em] text-orange-700">
             Recetario
           </p>
+
           <h1 className="mt-1 text-3xl font-black tracking-tight text-stone-900">
             Nueva receta
           </h1>
@@ -406,11 +472,13 @@ export default function NuevaRecetaPage() {
             <h2 className="text-xl font-black text-stone-900">
               Información general
             </h2>
+
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <label className="md:col-span-2">
                 <span className="mb-2 block text-sm font-bold text-stone-700">
                   Nombre de la receta
                 </span>
+
                 <input
                   type="text"
                   value={recipeName}
@@ -424,18 +492,21 @@ export default function NuevaRecetaPage() {
                 <span className="mb-2 block text-sm font-bold text-stone-700">
                   Categoría
                 </span>
+
                 <select
                   value={categoryId}
                   onChange={(event) => setCategoryId(event.target.value)}
                   className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
                 >
                   <option value="">Selecciona una categoría</option>
+
                   {categories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.name}
                     </option>
                   ))}
                 </select>
+
                 {categories.length === 0 && (
                   <p className="mt-2 text-xs text-amber-700">
                     Primero agrega categorías desde Configuración.
@@ -445,32 +516,14 @@ export default function NuevaRecetaPage() {
 
               <label>
                 <span className="mb-2 block text-sm font-bold text-stone-700">
-                  Tiempo total de horno
-                </span>
-                <div className="relative">
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={ovenTime}
-                    onChange={(event) => setOvenTime(event.target.value)}
-                    placeholder="45"
-                    className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
-                    min
-                  </span>
-                </div>
-              </label>
-
-              <label>
-                <span className="mb-2 block text-sm font-bold text-stone-700">
                   Mano de obra
                 </span>
+
                 <div className="relative">
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
                     $
                   </span>
+
                   <input
                     type="number"
                     min="0"
@@ -482,24 +535,110 @@ export default function NuevaRecetaPage() {
                   />
                 </div>
               </label>
+
+              <label>
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Minutos de electricidad
+                </span>
+
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={electricTimeMinutes}
+                    onChange={(event) =>
+                      setElectricTimeMinutes(event.target.value)
+                    }
+                    placeholder="0"
+                    className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                  />
+
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
+                    min
+                  </span>
+                </div>
+
+                <p className="mt-2 text-xs leading-5 text-stone-500">
+                  Suma el tiempo de horno eléctrico, batidora u otros equipos.
+                  Déjalo en 0 cuando no se utilicen.
+                </p>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Minutos de gas
+                </span>
+
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={gasTimeMinutes}
+                    onChange={(event) => setGasTimeMinutes(event.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                  />
+
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
+                    min
+                  </span>
+                </div>
+
+                <p className="mt-2 text-xs leading-5 text-stone-500">
+                  Suma el tiempo de horno o estufa de gas. Déjalo en 0 cuando no
+                  se utilicen.
+                </p>
+              </label>
+
+              <label className="md:col-span-2 md:max-w-[calc(50%-0.5rem)]">
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Porcentaje de utilidad
+                </span>
+
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    max="999.99"
+                    step="0.01"
+                    value={profitMarginPercent}
+                    onChange={(event) =>
+                      setProfitMarginPercent(event.target.value)
+                    }
+                    placeholder="30"
+                    className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-12 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                  />
+
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
+                    %
+                  </span>
+                </div>
+
+                <p className="mt-2 text-xs text-stone-500">
+                  Se aplica sobre el costo total de la receta.
+                </p>
+              </label>
             </div>
           </section>
 
           <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-stone-100 p-6">
+            <div className="flex flex-col gap-4 border-b border-stone-100 p-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-xl font-black text-stone-900">
                   Ingredientes
                 </h2>
+
                 <p className="mt-1 text-sm text-stone-500">
-                  Puedes cambiar el insumo y la cantidad directamente en cada
-                  fila.
+                  Selecciona el insumo y la cantidad utilizada.
                 </p>
               </div>
+
               <button
                 type="button"
                 onClick={addIngredientRow}
-                className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-black text-orange-800 transition hover:bg-orange-100"
+                className="rounded-xl border border-orange-300 bg-orange-50 px-4 py-2.5 text-sm font-black text-orange-800 transition hover:bg-orange-100"
               >
                 + Agregar fila
               </button>
@@ -507,18 +646,18 @@ export default function NuevaRecetaPage() {
 
             <div className="space-y-4 p-6">
               {recipeIngredients.map((row, index) => {
-                const costItem = ingredientCosts[index];
-                const selectedIngredient = costItem?.ingredient;
+                const costData = ingredientCosts[index];
 
                 return (
                   <div
-                    key={index}
-                    className="grid gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4 md:grid-cols-[1fr_180px_130px_auto] md:items-end"
+                    key={`ingredient-row-${index}`}
+                    className="grid gap-3 rounded-2xl border border-stone-200 bg-stone-50 p-4 md:grid-cols-[1.4fr_0.75fr_0.6fr_auto] md:items-end"
                   >
                     <label>
                       <span className="mb-2 block text-xs font-black uppercase tracking-wider text-stone-500">
                         Insumo
                       </span>
+
                       <select
                         value={row.ingredientId}
                         onChange={(event) =>
@@ -528,14 +667,14 @@ export default function NuevaRecetaPage() {
                             event.target.value,
                           )
                         }
-                        className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                        className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                       >
                         <option value="">Selecciona un ingrediente</option>
+
                         {inventory.map((ingredient) => (
                           <option key={ingredient.id} value={ingredient.id}>
-                            {ingredient.name} ·{" "}
-                            {quantity(ingredient.current_stock)}{" "}
-                            {ingredient.unit} disponibles
+                            {ingredient.name} · {ingredient.current_stock}{" "}
+                            {ingredient.unit}
                           </option>
                         ))}
                       </select>
@@ -545,6 +684,7 @@ export default function NuevaRecetaPage() {
                       <span className="mb-2 block text-xs font-black uppercase tracking-wider text-stone-500">
                         Cantidad
                       </span>
+
                       <div className="relative">
                         <input
                           type="number"
@@ -558,20 +698,22 @@ export default function NuevaRecetaPage() {
                               event.target.value,
                             )
                           }
-                          className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 pr-14 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                          className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 pr-14 outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                         />
+
                         <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-black text-stone-400">
-                          {selectedIngredient?.unit || "—"}
+                          {costData?.ingredient?.unit || "—"}
                         </span>
                       </div>
                     </label>
 
                     <div>
-                      <span className="mb-2 block text-xs font-black uppercase tracking-wider text-stone-500">
+                      <p className="mb-2 text-xs font-black uppercase tracking-wider text-stone-500">
                         Costo
-                      </span>
+                      </p>
+
                       <div className="rounded-xl border border-stone-200 bg-white px-4 py-3 text-right font-black text-stone-800">
-                        {money(costItem?.cost)}
+                        {money(costData?.cost)}
                       </div>
                     </div>
 
@@ -592,16 +734,18 @@ export default function NuevaRecetaPage() {
             <div className="flex items-center justify-between border-b border-stone-100 p-6">
               <div>
                 <h2 className="text-xl font-black text-stone-900">
-                  Pasos de preparación
+                  Preparación
                 </h2>
+
                 <p className="mt-1 text-sm text-stone-500">
-                  Agrega, modifica, elimina o cambia el orden de los pasos.
+                  Registra los pasos en el orden correcto.
                 </p>
               </div>
+
               <button
                 type="button"
                 onClick={addStep}
-                className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-black text-orange-800 transition hover:bg-orange-100"
+                className="rounded-xl border border-orange-300 bg-orange-50 px-4 py-2.5 text-sm font-black text-orange-800 transition hover:bg-orange-100"
               >
                 + Agregar paso
               </button>
@@ -610,38 +754,40 @@ export default function NuevaRecetaPage() {
             <div className="space-y-4 p-6">
               {steps.map((step, index) => (
                 <div
-                  key={index}
-                  className="flex gap-3 rounded-xl border border-stone-200 bg-stone-50 p-4"
+                  key={`step-${index}`}
+                  className="grid gap-3 rounded-2xl border border-stone-200 bg-stone-50 p-4 sm:grid-cols-[auto_1fr_auto] sm:items-start"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#3b2a20] font-black text-white">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-100 font-black text-orange-800">
                     {index + 1}
                   </span>
 
                   <textarea
+                    rows={3}
                     value={step.description}
                     onChange={(event) => updateStep(index, event.target.value)}
-                    rows={3}
-                    placeholder="Describe este paso..."
-                    className="min-h-24 flex-1 resize-y rounded-xl border border-stone-300 bg-white px-4 py-3 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                    placeholder={`Describe el paso ${index + 1}`}
+                    className="w-full resize-y rounded-xl border border-stone-300 bg-white px-4 py-3 outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                   />
 
-                  <div className="flex shrink-0 flex-col gap-2">
+                  <div className="flex gap-2 sm:flex-col">
                     <button
                       type="button"
-                      onClick={() => moveStep(index, -1)}
                       disabled={index === 0}
-                      className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-700 disabled:opacity-30"
+                      onClick={() => moveStep(index, -1)}
+                      className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-black text-stone-700 disabled:opacity-40"
                     >
                       ↑
                     </button>
+
                     <button
                       type="button"
-                      onClick={() => moveStep(index, 1)}
                       disabled={index === steps.length - 1}
-                      className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-black text-stone-700 disabled:opacity-30"
+                      onClick={() => moveStep(index, 1)}
+                      className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-black text-stone-700 disabled:opacity-40"
                     >
                       ↓
                     </button>
+
                     <button
                       type="button"
                       onClick={() => removeStep(index)}
@@ -662,26 +808,63 @@ export default function NuevaRecetaPage() {
               <p className="text-xs font-black uppercase tracking-[.16em] text-orange-200">
                 Cálculo actual
               </p>
+
               <h2 className="mt-2 text-xl font-black">Costo de la receta</h2>
             </div>
 
             <div className="space-y-4 p-6 text-sm">
-              <CostRow label="Ingredientes" value={money(ingredientTotal)} />
-              <CostRow label="Electricidad" value={money(electricityCost)} />
-              <CostRow label="Mano de obra" value={money(parsedLaborCost)} />
+              <CostRow
+                label="Ingredientes"
+                value={money(calculations.ingredientTotal)}
+              />
+
+              <CostRow
+                label="Electricidad"
+                value={money(calculations.electricCost)}
+              />
+
+              <CostRow label="Gas" value={money(calculations.gasCost)} />
+
+              <CostRow
+                label="Mano de obra"
+                value={money(calculations.laborCost)}
+              />
 
               <div className="border-t border-white/15 pt-4">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="font-black text-white">Costo total</span>
-                  <span className="text-2xl font-black text-orange-200">
-                    {money(totalCost)}
-                  </span>
+                <CostRow
+                  label="Costo total"
+                  value={money(calculations.totalCost)}
+                />
+
+                <div className="mt-3">
+                  <CostRow
+                    label={`Utilidad (${calculations.profitPercent}%)`}
+                    value={money(calculations.profitAmount)}
+                  />
                 </div>
               </div>
 
-              <div className="rounded-xl bg-white/10 p-4 text-xs leading-5 text-stone-200">
-                La electricidad se calcula con la potencia del horno y el costo
-                por kWh configurados en el sistema.
+              <div className="rounded-xl bg-orange-100 p-4 text-[#3b2a20]">
+                <p className="text-xs font-black uppercase tracking-[.14em] text-orange-800">
+                  Precio final
+                </p>
+
+                <p className="mt-2 text-3xl font-black">
+                  {money(calculations.finalPrice)}
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-white/10 p-4 text-xs leading-6 text-stone-200">
+                <p>
+                  Electricidad: potencia configurada × minutos eléctricos ×
+                  costo por kWh.
+                </p>
+                <p className="mt-2">
+                  Gas: minutos de gas × costo configurado por hora.
+                </p>
+                <p className="mt-2 font-bold text-orange-100">
+                  Cuando un consumo no aplique, déjalo en 0.
+                </p>
               </div>
             </div>
           </div>

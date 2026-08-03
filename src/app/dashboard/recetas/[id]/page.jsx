@@ -17,7 +17,9 @@ async function getRecipeDetail(recipeId) {
   ] = await Promise.all([
     supabase
       .from("app_config")
-      .select("business_name, logo_url, kwh_cost, oven_power_watts")
+      .select(
+        "business_name, logo_url, kwh_cost, electric_power_watts, oven_power_watts, gas_hourly_cost",
+      )
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -30,6 +32,9 @@ async function getRecipeDetail(recipeId) {
         name,
         category_id,
         labor_cost,
+        profit_margin_percent,
+        electric_time_minutes,
+        gas_time_minutes,
         oven_time_minutes,
         created_at,
         updated_at,
@@ -124,7 +129,9 @@ async function getRecipeDetail(recipeId) {
       business_name: "Mi negocio",
       logo_url: "",
       kwh_cost: 0,
+      electric_power_watts: 0,
       oven_power_watts: 0,
+      gas_hourly_cost: 0,
     },
     recipe: recipeResult.data,
     relations,
@@ -218,8 +225,10 @@ export default function DetalleRecetaPage() {
 
   const [draftName, setDraftName] = useState("");
   const [draftCategoryId, setDraftCategoryId] = useState("");
-  const [draftOvenTime, setDraftOvenTime] = useState("");
+  const [draftElectricTime, setDraftElectricTime] = useState("");
+  const [draftGasTime, setDraftGasTime] = useState("");
   const [draftLaborCost, setDraftLaborCost] = useState("");
+  const [draftProfitMargin, setDraftProfitMargin] = useState("30");
   const [draftIngredients, setDraftIngredients] = useState([]);
   const [draftSteps, setDraftSteps] = useState([]);
 
@@ -278,9 +287,13 @@ export default function DetalleRecetaPage() {
     if (!recipe) {
       return {
         ingredientCost: 0,
-        electricityCost: 0,
+        electricCost: 0,
+        gasCost: 0,
         laborCost: 0,
         totalCost: 0,
+        profitPercent: 0,
+        profitAmount: 0,
+        finalPrice: 0,
       };
     }
 
@@ -293,18 +306,34 @@ export default function DetalleRecetaPage() {
       );
     }, 0);
 
-    const electricityCost =
-      (Number(config?.oven_power_watts || 0) / 1000) *
-      (Number(recipe.oven_time_minutes || 0) / 60) *
+    const electricPower =
+      Number(config?.electric_power_watts) ||
+      Number(config?.oven_power_watts) ||
+      0;
+
+    const electricCost =
+      (electricPower / 1000) *
+      (Number(recipe.electric_time_minutes || 0) / 60) *
       Number(config?.kwh_cost || 0);
 
+    const gasCost =
+      (Number(recipe.gas_time_minutes || 0) / 60) *
+      Number(config?.gas_hourly_cost || 0);
+
     const laborCost = Number(recipe.labor_cost || 0);
+    const totalCost = ingredientCost + electricCost + gasCost + laborCost;
+    const profitPercent = Number(recipe.profit_margin_percent || 0);
+    const profitAmount = totalCost * (profitPercent / 100);
 
     return {
       ingredientCost,
-      electricityCost,
+      electricCost,
+      gasCost,
       laborCost,
-      totalCost: ingredientCost + electricityCost + laborCost,
+      totalCost,
+      profitPercent,
+      profitAmount,
+      finalPrice: totalCost + profitAmount,
     };
   }, [config, recipe, relations]);
 
@@ -317,26 +346,51 @@ export default function DetalleRecetaPage() {
       );
     }, 0);
 
-    const electricityCost =
-      (Number(config?.oven_power_watts || 0) / 1000) *
-      (Number(draftOvenTime || 0) / 60) *
+    const electricPower =
+      Number(config?.electric_power_watts) ||
+      Number(config?.oven_power_watts) ||
+      0;
+
+    const electricCost =
+      (electricPower / 1000) *
+      (Number(draftElectricTime || 0) / 60) *
       Number(config?.kwh_cost || 0);
 
+    const gasCost =
+      (Number(draftGasTime || 0) / 60) * Number(config?.gas_hourly_cost || 0);
+
     const laborCost = Number(draftLaborCost || 0);
+    const totalCost = ingredientCost + electricCost + gasCost + laborCost;
+    const profitPercent = Number(draftProfitMargin || 0);
+    const profitAmount = totalCost * (profitPercent / 100);
 
     return {
       ingredientCost,
-      electricityCost,
+      electricCost,
+      gasCost,
       laborCost,
-      totalCost: ingredientCost + electricityCost + laborCost,
+      totalCost,
+      profitPercent,
+      profitAmount,
+      finalPrice: totalCost + profitAmount,
     };
-  }, [config, draftIngredients, draftLaborCost, draftOvenTime, inventory]);
+  }, [
+    config,
+    draftElectricTime,
+    draftGasTime,
+    draftIngredients,
+    draftLaborCost,
+    draftProfitMargin,
+    inventory,
+  ]);
 
   const startEditing = () => {
     setDraftName(recipe.name ?? "");
     setDraftCategoryId(recipe.category_id ?? "");
-    setDraftOvenTime(String(recipe.oven_time_minutes ?? 0));
+    setDraftElectricTime(String(recipe.electric_time_minutes ?? 0));
+    setDraftGasTime(String(recipe.gas_time_minutes ?? 0));
     setDraftLaborCost(String(recipe.labor_cost ?? 0));
+    setDraftProfitMargin(String(recipe.profit_margin_percent ?? 0));
     setDraftIngredients(
       relations.map((relation) => ({
         ingredientId: relation.ingredient_id,
@@ -474,13 +528,26 @@ export default function DetalleRecetaPage() {
     }
 
     if (
-      !Number.isFinite(Number(draftOvenTime || 0)) ||
-      Number(draftOvenTime || 0) < 0
+      !Number.isFinite(Number(draftElectricTime || 0)) ||
+      Number(draftElectricTime || 0) < 0
     ) {
       await Swal.fire({
         icon: "warning",
-        title: "Tiempo inválido",
-        text: "El tiempo de horno no puede ser negativo.",
+        title: "Minutos eléctricos inválidos",
+        text: "Los minutos de electricidad no pueden ser negativos.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return;
+    }
+
+    if (
+      !Number.isFinite(Number(draftGasTime || 0)) ||
+      Number(draftGasTime || 0) < 0
+    ) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Minutos de gas inválidos",
+        text: "Los minutos de gas no pueden ser negativos.",
         confirmButtonColor: "#8b5e3c",
       });
       return;
@@ -494,6 +561,20 @@ export default function DetalleRecetaPage() {
         icon: "warning",
         title: "Costo inválido",
         text: "La mano de obra no puede ser negativa.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return;
+    }
+
+    if (
+      !Number.isFinite(Number(draftProfitMargin || 0)) ||
+      Number(draftProfitMargin || 0) < 0 ||
+      Number(draftProfitMargin || 0) > 999.99
+    ) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Utilidad inválida",
+        text: "El porcentaje de utilidad debe estar entre 0 y 999.99.",
         confirmButtonColor: "#8b5e3c",
       });
       return;
@@ -521,7 +602,9 @@ export default function DetalleRecetaPage() {
         p_name: draftName.trim(),
         p_category_id: draftCategoryId,
         p_labor_cost: Number(draftLaborCost || 0),
-        p_oven_time_minutes: Math.trunc(Number(draftOvenTime || 0)),
+        p_profit_margin_percent: Number(draftProfitMargin || 0),
+        p_electric_time_minutes: Math.trunc(Number(draftElectricTime || 0)),
+        p_gas_time_minutes: Math.trunc(Number(draftGasTime || 0)),
         p_ingredients: normalizedIngredients.map((row) => ({
           ingredient_id: row.ingredientId,
           quantity_needed: Number(row.quantityNeeded),
@@ -678,6 +761,7 @@ export default function DetalleRecetaPage() {
         html: `
           <p>Se registraron <strong>${batches} lote(s)</strong>.</p>
           <p style="margin-top:10px">Costo total: <strong>${money(data?.production_cost)}</strong></p>
+          <p style="margin-top:6px">Precio final del lote: <strong>${money(data?.final_price)}</strong></p>
           ${
             lowStock.length > 0
               ? `
@@ -782,10 +866,12 @@ export default function DetalleRecetaPage() {
       pdf.text(`Categoría: ${category?.name || "Sin categoría"}`, margin, y);
       y += 6;
       pdf.text(
-        `Tiempo de horno: ${quantity(recipe.oven_time_minutes)} minutos`,
+        `Electricidad: ${quantity(recipe.electric_time_minutes)} minutos`,
         margin,
         y,
       );
+      y += 6;
+      pdf.text(`Gas: ${quantity(recipe.gas_time_minutes)} minutos`, margin, y);
       y += 12;
 
       const ensureSpace = (needed = 20) => {
@@ -851,9 +937,9 @@ export default function DetalleRecetaPage() {
       }
 
       y += 5;
-      ensureSpace(48);
+      ensureSpace(65);
       pdf.setFillColor(247, 245, 242);
-      pdf.roundedRect(margin, y, pageWidth - margin * 2, 43, 3, 3, "F");
+      pdf.roundedRect(margin, y, pageWidth - margin * 2, 59, 3, 3, "F");
       y += 8;
 
       pdf.setFont("helvetica", "bold");
@@ -864,9 +950,15 @@ export default function DetalleRecetaPage() {
 
       const rows = [
         ["Ingredientes", money(calculations.ingredientCost)],
-        ["Electricidad", money(calculations.electricityCost)],
+        ["Electricidad", money(calculations.electricCost)],
+        ["Gas", money(calculations.gasCost)],
         ["Mano de obra", money(calculations.laborCost)],
         ["Costo total", money(calculations.totalCost)],
+        [
+          `Utilidad (${quantity(calculations.profitPercent)}%)`,
+          money(calculations.profitAmount),
+        ],
+        ["Precio final", money(calculations.finalPrice)],
       ];
 
       rows.forEach(([label, value], index) => {
@@ -989,10 +1081,14 @@ export default function DetalleRecetaPage() {
           setName={setDraftName}
           categoryId={draftCategoryId}
           setCategoryId={setDraftCategoryId}
-          ovenTime={draftOvenTime}
-          setOvenTime={setDraftOvenTime}
+          electricTime={draftElectricTime}
+          setElectricTime={setDraftElectricTime}
+          gasTime={draftGasTime}
+          setGasTime={setDraftGasTime}
           laborCost={draftLaborCost}
           setLaborCost={setDraftLaborCost}
+          profitMargin={draftProfitMargin}
+          setProfitMargin={setDraftProfitMargin}
           ingredients={draftIngredients}
           updateIngredient={updateDraftIngredient}
           addIngredient={addDraftIngredient}
@@ -1021,10 +1117,16 @@ function RecipeView({ recipe, category, relations, steps, calculations }) {
         </h1>
         <div className="mt-6 flex flex-wrap gap-3 text-sm font-bold text-stone-100">
           <span className="rounded-full bg-white/10 px-4 py-2">
-            {quantity(recipe.oven_time_minutes)} minutos de horno
+            ⚡ {quantity(recipe.electric_time_minutes)} min eléctricos
+          </span>
+          <span className="rounded-full bg-white/10 px-4 py-2">
+            🔥 {quantity(recipe.gas_time_minutes)} min de gas
           </span>
           <span className="rounded-full bg-white/10 px-4 py-2">
             {relations.length} ingrediente(s)
+          </span>
+          <span className="rounded-full bg-white/10 px-4 py-2">
+            {quantity(recipe.profit_margin_percent)}% de utilidad
           </span>
         </div>
       </section>
@@ -1123,10 +1225,14 @@ function RecipeEditor({
   setName,
   categoryId,
   setCategoryId,
-  ovenTime,
-  setOvenTime,
+  electricTime,
+  setElectricTime,
+  gasTime,
+  setGasTime,
   laborCost,
   setLaborCost,
+  profitMargin,
+  setProfitMargin,
   ingredients,
   updateIngredient,
   addIngredient,
@@ -1177,15 +1283,34 @@ function RecipeEditor({
 
             <label>
               <span className="mb-2 block text-sm font-bold text-stone-700">
-                Tiempo de horno
+                Minutos de electricidad
               </span>
               <div className="relative">
                 <input
                   type="number"
                   min="0"
                   step="1"
-                  value={ovenTime}
-                  onChange={(event) => setOvenTime(event.target.value)}
+                  value={electricTime}
+                  onChange={(event) => setElectricTime(event.target.value)}
+                  className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-black text-stone-400">
+                  min
+                </span>
+              </div>
+            </label>
+
+            <label>
+              <span className="mb-2 block text-sm font-bold text-stone-700">
+                Minutos de gas
+              </span>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={gasTime}
+                  onChange={(event) => setGasTime(event.target.value)}
                   className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
                 />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-black text-stone-400">
@@ -1210,6 +1335,26 @@ function RecipeEditor({
                   onChange={(event) => setLaborCost(event.target.value)}
                   className="w-full rounded-xl border border-stone-300 bg-stone-50 py-3 pl-9 pr-4 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
                 />
+              </div>
+            </label>
+
+            <label>
+              <span className="mb-2 block text-sm font-bold text-stone-700">
+                Porcentaje de utilidad
+              </span>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="0"
+                  max="999.99"
+                  step="0.01"
+                  value={profitMargin}
+                  onChange={(event) => setProfitMargin(event.target.value)}
+                  className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-12 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
+                  %
+                </span>
               </div>
             </label>
           </div>
@@ -1407,16 +1552,29 @@ function CostSummary({ calculations }) {
           />
           <CostRow
             label="Electricidad"
-            value={money(calculations.electricityCost)}
+            value={money(calculations.electricCost)}
           />
+          <CostRow label="Gas" value={money(calculations.gasCost)} />
           <CostRow label="Mano de obra" value={money(calculations.laborCost)} />
           <div className="border-t border-white/15 pt-4">
-            <div className="flex items-center justify-between gap-4">
-              <span className="font-black">Costo total</span>
-              <span className="text-2xl font-black text-orange-200">
-                {money(calculations.totalCost)}
-              </span>
+            <CostRow
+              label="Costo total"
+              value={money(calculations.totalCost)}
+            />
+            <div className="mt-3">
+              <CostRow
+                label={`Utilidad (${quantity(calculations.profitPercent)}%)`}
+                value={money(calculations.profitAmount)}
+              />
             </div>
+          </div>
+          <div className="rounded-xl bg-orange-100 p-4 text-[#3b2a20]">
+            <p className="text-xs font-black uppercase tracking-[.14em] text-orange-800">
+              Precio final
+            </p>
+            <p className="mt-2 text-3xl font-black">
+              {money(calculations.finalPrice)}
+            </p>
           </div>
         </div>
       </div>

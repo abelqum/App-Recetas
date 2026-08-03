@@ -15,7 +15,9 @@ async function getConfigurationData() {
           business_name,
           logo_url,
           kwh_cost,
+          electric_power_watts,
           oven_power_watts,
+          gas_hourly_cost,
           low_stock_percentage,
           updated_at
         `,
@@ -45,7 +47,8 @@ export default function ConfiguracionPage() {
   const [logoPreview, setLogoPreview] = useState("");
   const [logoFile, setLogoFile] = useState(null);
   const [kwhCost, setKwhCost] = useState("");
-  const [ovenPowerWatts, setOvenPowerWatts] = useState("");
+  const [electricPowerWatts, setElectricPowerWatts] = useState("");
+  const [gasHourlyCost, setGasHourlyCost] = useState("");
   const [lowStockPercentage, setLowStockPercentage] = useState("20");
 
   const [categories, setCategories] = useState([]);
@@ -75,7 +78,14 @@ export default function ConfiguracionPage() {
           setLogoUrl(data.config.logo_url ?? "");
           setLogoPreview(data.config.logo_url ?? "");
           setKwhCost(String(data.config.kwh_cost ?? ""));
-          setOvenPowerWatts(String(data.config.oven_power_watts ?? ""));
+          setElectricPowerWatts(
+            String(
+              data.config.electric_power_watts ??
+                data.config.oven_power_watts ??
+                "",
+            ),
+          );
+          setGasHourlyCost(String(data.config.gas_hourly_cost ?? ""));
           setLowStockPercentage(String(data.config.low_stock_percentage ?? 20));
         }
       } catch (error) {
@@ -187,8 +197,9 @@ export default function ConfiguracionPage() {
     event.preventDefault();
 
     const normalizedName = businessName.trim();
-    const parsedKwhCost = Number(kwhCost);
-    const parsedOvenPower = Number(ovenPowerWatts);
+    const parsedKwhCost = Number(kwhCost || 0);
+    const parsedElectricPower = Number(electricPowerWatts || 0);
+    const parsedGasHourlyCost = Number(gasHourlyCost || 0);
     const parsedLowStockPercentage = Number(lowStockPercentage);
 
     if (!normalizedName) {
@@ -211,11 +222,21 @@ export default function ConfiguracionPage() {
       return;
     }
 
-    if (!Number.isFinite(parsedOvenPower) || parsedOvenPower < 0) {
+    if (!Number.isFinite(parsedElectricPower) || parsedElectricPower < 0) {
       await Swal.fire({
         icon: "warning",
         title: "Potencia inválida",
-        text: "La potencia del horno debe ser igual o mayor que cero.",
+        text: "La potencia eléctrica estimada debe ser igual o mayor que cero.",
+        confirmButtonColor: "#8b5e3c",
+      });
+      return;
+    }
+
+    if (!Number.isFinite(parsedGasHourlyCost) || parsedGasHourlyCost < 0) {
+      await Swal.fire({
+        icon: "warning",
+        title: "Costo inválido",
+        text: "El costo de gas por hora debe ser igual o mayor que cero.",
         confirmButtonColor: "#8b5e3c",
       });
       return;
@@ -253,7 +274,9 @@ export default function ConfiguracionPage() {
         business_name: normalizedName,
         logo_url: uploadedLogoUrl || null,
         kwh_cost: parsedKwhCost,
-        oven_power_watts: parsedOvenPower,
+        electric_power_watts: parsedElectricPower,
+        oven_power_watts: parsedElectricPower,
+        gas_hourly_cost: parsedGasHourlyCost,
         low_stock_percentage: parsedLowStockPercentage,
         updated_at: new Date().toISOString(),
       };
@@ -642,57 +665,107 @@ export default function ConfiguracionPage() {
         <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
           <div className="border-b border-stone-100 bg-amber-50/70 px-6 py-5">
             <h2 className="text-xl font-black text-stone-900">
-              Electricidad e inventario
+              Consumos de electricidad y gas
             </h2>
             <p className="mt-1 text-sm text-stone-500">
-              Estos valores se utilizan en los costos y en las alertas.
+              Configura ambos consumos. Cada receta guardará por separado sus
+              minutos eléctricos y sus minutos de gas.
             </p>
           </div>
 
-          <div className="grid gap-5 p-6 md:grid-cols-3 md:p-7">
-            <label>
-              <span className="mb-2 block text-sm font-bold text-stone-700">
-                Costo por kWh
-              </span>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
-                  $
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={kwhCost}
-                  onChange={(event) => setKwhCost(event.target.value)}
-                  placeholder="3.00"
-                  className="w-full rounded-xl border border-stone-300 bg-stone-50 py-3 pl-9 pr-4 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
-                />
-              </div>
-            </label>
+          <div className="grid gap-5 p-6 md:grid-cols-2 md:p-7">
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
+              <h3 className="font-black text-stone-900">Electricidad</h3>
+              <p className="mt-1 text-sm leading-6 text-stone-500">
+                Para horno eléctrico, batidora y otros aparatos.
+              </p>
 
-            <label>
-              <span className="mb-2 block text-sm font-bold text-stone-700">
-                Potencia del horno
-              </span>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={ovenPowerWatts}
-                  onChange={(event) => setOvenPowerWatts(event.target.value)}
-                  placeholder="1800"
-                  className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
-                  watts
-                </span>
-              </div>
-            </label>
+              <div className="mt-5 space-y-4">
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-stone-700">
+                    Costo por kWh
+                  </span>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
+                      $
+                    </span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={kwhCost}
+                      onChange={(event) => setKwhCost(event.target.value)}
+                      placeholder="3.00"
+                      className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-9 pr-4 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                    />
+                  </div>
+                </label>
 
-            <label>
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-stone-700">
+                    Potencia eléctrica estimada
+                  </span>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={electricPowerWatts}
+                      onChange={(event) =>
+                        setElectricPowerWatts(event.target.value)
+                      }
+                      placeholder="1800"
+                      className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
+                      watts
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-stone-500">
+                    Usa una potencia promedio aproximada de los equipos
+                    eléctricos que normalmente se emplean.
+                  </p>
+                </label>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
+              <h3 className="font-black text-stone-900">Gas</h3>
+              <p className="mt-1 text-sm leading-6 text-stone-500">
+                Para horno, estufa u otros equipos que consumen gas.
+              </p>
+
+              <label className="mt-5 block">
+                <span className="mb-2 block text-sm font-bold text-stone-700">
+                  Costo estimado de gas por hora
+                </span>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={gasHourlyCost}
+                    onChange={(event) => setGasHourlyCost(event.target.value)}
+                    placeholder="18.50"
+                    className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-9 pr-20 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
+                    por hora
+                  </span>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-stone-500">
+                  Si una carga de $520 representa unas 30 horas de uso, registra
+                  aproximadamente $17.33 por hora.
+                </p>
+              </label>
+            </div>
+
+            <label className="md:col-span-2 md:max-w-md">
               <span className="mb-2 block text-sm font-bold text-stone-700">
-                Aviso antes del mínimo
+                Aviso preventivo antes del stock mínimo
               </span>
               <div className="relative">
                 <input
@@ -712,13 +785,12 @@ export default function ConfiguracionPage() {
               </div>
             </label>
 
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 md:col-span-3">
-              <p className="font-black text-amber-900">
-                Cálculo de electricidad
-              </p>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 md:col-span-2">
+              <p className="font-black text-amber-900">Cómo se calculará</p>
               <p className="mt-2 text-sm leading-6 text-amber-800">
-                Potencia del horno en kW × horas de uso × costo por kWh. La
-                receta solamente necesita guardar sus minutos de horno.
+                Electricidad: potencia en kW × horas eléctricas × costo por kWh.
+                Gas: horas de gas × costo por hora. En cada receta puedes usar
+                ambos o dejar cualquiera en 0.
               </p>
             </div>
           </div>
