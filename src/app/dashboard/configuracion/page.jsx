@@ -48,7 +48,7 @@ export default function ConfiguracionPage() {
   const [logoFile, setLogoFile] = useState(null);
   const [kwhCost, setKwhCost] = useState("");
   const [electricPowerWatts, setElectricPowerWatts] = useState("");
-  const [gasHourlyCost, setGasHourlyCost] = useState("");
+  const [gasHourlyCost, setGasHourlyCost] = useState("10");
   const [lowStockPercentage, setLowStockPercentage] = useState("20");
 
   const [categories, setCategories] = useState([]);
@@ -85,7 +85,7 @@ export default function ConfiguracionPage() {
                 "",
             ),
           );
-          setGasHourlyCost(String(data.config.gas_hourly_cost ?? ""));
+          setGasHourlyCost(String(data.config.gas_hourly_cost ?? 10));
           setLowStockPercentage(String(data.config.low_stock_percentage ?? 20));
         }
       } catch (error) {
@@ -661,50 +661,71 @@ export default function ConfiguracionPage() {
             </div>
           </div>
         </section>
-
         <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
           <div className="border-b border-stone-100 bg-amber-50/70 px-6 py-5">
             <h2 className="text-xl font-black text-stone-900">
-              Consumos de electricidad y gas
+              Costos de electricidad y gas
             </h2>
-            <p className="mt-1 text-sm text-stone-500">
-              Configura ambos consumos. Cada receta guardará por separado sus
-              minutos eléctricos y sus minutos de gas.
+
+            <p className="mt-1 text-sm leading-6 text-stone-500">
+              Configura el precio de la electricidad, la potencia del horno
+              eléctrico y el costo estimado del gas. En cada receta podrás
+              indicar por separado los minutos de electricidad y los minutos de
+              gas.
             </p>
           </div>
 
           <div className="grid gap-5 p-6 md:grid-cols-2 md:p-7">
+            {/* Electricidad */}
             <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
-              <h3 className="font-black text-stone-900">Electricidad</h3>
-              <p className="mt-1 text-sm leading-6 text-stone-500">
-                Para horno eléctrico, batidora y otros aparatos.
-              </p>
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-xl">
+                  ⚡
+                </div>
 
-              <div className="mt-5 space-y-4">
+                <div>
+                  <h3 className="font-black text-stone-900">Electricidad</h3>
+
+                  <p className="mt-1 text-sm leading-6 text-stone-500">
+                    Se utiliza para calcular el costo del horno eléctrico. Si su
+                    horno es de gas, puedes dejar la potencia en 0.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 space-y-5">
                 <label className="block">
                   <span className="mb-2 block text-sm font-bold text-stone-700">
                     Costo por kWh
                   </span>
+
                   <div className="relative">
                     <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
                       $
                     </span>
+
                     <input
                       type="number"
                       min="0"
                       step="0.01"
                       value={kwhCost}
                       onChange={(event) => setKwhCost(event.target.value)}
-                      placeholder="3.00"
-                      className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-9 pr-4 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                      placeholder="1.37"
+                      className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-9 pr-4 text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                     />
                   </div>
+
+                  <p className="mt-2 text-xs leading-5 text-stone-500">
+                    Con el recibo que revisamos puedes comenzar utilizando
+                    aproximadamente $1.37 por kWh.
+                  </p>
                 </label>
 
                 <label className="block">
                   <span className="mb-2 block text-sm font-bold text-stone-700">
-                    Potencia eléctrica estimada
+                    Potencia del horno eléctrico
                   </span>
+
                   <div className="relative">
                     <input
                       type="number"
@@ -715,83 +736,161 @@ export default function ConfiguracionPage() {
                         setElectricPowerWatts(event.target.value)
                       }
                       placeholder="1800"
-                      className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 pr-16 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                      className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 pr-20 text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                     />
+
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
                       watts
                     </span>
                   </div>
+
                   <p className="mt-2 text-xs leading-5 text-stone-500">
-                    Usa una potencia promedio aproximada de los equipos
-                    eléctricos que normalmente se emplean.
+                    Busca la potencia en la etiqueta del horno. Puede aparecer
+                    como 1200 W, 1500 W, 1800 W o un valor similar. Si el horno
+                    es de gas, deja este campo en 0.
                   </p>
                 </label>
-              </div>
-            </div>
 
-            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
-              <h3 className="font-black text-stone-900">Gas</h3>
-              <p className="mt-1 text-sm leading-6 text-stone-500">
-                Para horno, estufa u otros equipos que consumen gas.
-              </p>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-sm font-black text-amber-900">
+                    Cálculo de electricidad
+                  </p>
 
-              <label className="mt-5 block">
-                <span className="mb-2 block text-sm font-bold text-stone-700">
-                  Costo estimado de gas por hora
-                </span>
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
-                    $
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={gasHourlyCost}
-                    onChange={(event) => setGasHourlyCost(event.target.value)}
-                    placeholder="18.50"
-                    className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-9 pr-20 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
-                    por hora
-                  </span>
+                  <p className="mt-2 text-xs leading-5 text-amber-800">
+                    Potencia del horno en kW × minutos de electricidad ÷ 60 ×
+                    costo por kWh.
+                  </p>
                 </div>
-                <p className="mt-2 text-xs leading-5 text-stone-500">
-                  Si una carga de $520 representa unas 30 horas de uso, registra
-                  aproximadamente $17.33 por hora.
-                </p>
-              </label>
+              </div>
             </div>
 
-            <label className="md:col-span-2 md:max-w-md">
-              <span className="mb-2 block text-sm font-bold text-stone-700">
-                Aviso preventivo antes del stock mínimo
-              </span>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={lowStockPercentage}
-                  onChange={(event) =>
-                    setLowStockPercentage(event.target.value)
-                  }
-                  className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 pr-12 outline-none transition focus:border-orange-500 focus:bg-white focus:ring-4 focus:ring-orange-100"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
-                  %
-                </span>
-              </div>
-            </label>
+            {/* Gas */}
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-xl">
+                  🔥
+                </div>
 
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 md:col-span-2">
-              <p className="font-black text-amber-900">Cómo se calculará</p>
-              <p className="mt-2 text-sm leading-6 text-amber-800">
-                Electricidad: potencia en kW × horas eléctricas × costo por kWh.
-                Gas: horas de gas × costo por hora. En cada receta puedes usar
-                ambos o dejar cualquiera en 0.
+                <div>
+                  <h3 className="font-black text-stone-900">Gas</h3>
+
+                  <p className="mt-1 text-sm leading-6 text-stone-500">
+                    Se utiliza para calcular el consumo del horno de gas, la
+                    estufa o los quemadores utilizados para preparar una receta.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5">
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-stone-700">
+                    Costo estimado de gas por hora
+                  </span>
+
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-stone-400">
+                      $
+                    </span>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={gasHourlyCost}
+                      onChange={(event) => setGasHourlyCost(event.target.value)}
+                      placeholder="7.00"
+                      className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-9 pr-24 text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
+                    />
+
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-stone-400">
+                      por hora
+                    </span>
+                  </div>
+
+                  <p className="mt-2 text-xs leading-5 text-stone-500">
+                    Por ahora puedes usar $7.00 por hora como estimación para un
+                    horno doméstico de gas utilizado para galletas, roles,
+                    brownies y preparaciones similares.
+                  </p>
+                </label>
+
+                <div className="mt-5 rounded-xl border border-orange-200 bg-orange-50 p-4">
+                  <p className="text-sm font-black text-orange-900">
+                    Cálculo de gas
+                  </p>
+
+                  <p className="mt-2 text-xs leading-5 text-orange-800">
+                    Minutos de gas ÷ 60 × costo estimado de gas por hora.
+                  </p>
+                </div>
+
+                <div className="mt-5 rounded-xl border border-stone-200 bg-white p-4">
+                  <p className="text-sm font-black text-stone-800">Ejemplo</p>
+
+                  <p className="mt-2 text-xs leading-5 text-stone-600">
+                    Una receta que utiliza 40 minutos de gas con un costo de
+                    $7.00 por hora tendrá un costo aproximado de gas de $4.67.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Explicación general */}
+            <div className="rounded-2xl border border-[#d8c4ae] bg-[#fffaf4] p-5 md:col-span-2">
+              <p className="font-black text-[#6f482e]">
+                ¿Cómo se utiliza en las recetas?
               </p>
+
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                En cada receta encontrarás dos campos diferentes:
+                <strong> minutos de electricidad</strong> y
+                <strong> minutos de gas</strong>. Puedes utilizar los dos al
+                mismo tiempo o dejar cualquiera en 0 cuando no se necesite.
+              </p>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-stone-200 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-stone-400">
+                    Solo gas
+                  </p>
+
+                  <p className="mt-2 text-sm font-bold text-stone-800">
+                    Electricidad: 0 min
+                  </p>
+
+                  <p className="mt-1 text-sm font-bold text-stone-800">
+                    Gas: 40 min
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-stone-200 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-stone-400">
+                    Solo electricidad
+                  </p>
+
+                  <p className="mt-2 text-sm font-bold text-stone-800">
+                    Electricidad: 30 min
+                  </p>
+
+                  <p className="mt-1 text-sm font-bold text-stone-800">
+                    Gas: 0 min
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-stone-200 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wider text-stone-400">
+                    Uso combinado
+                  </p>
+
+                  <p className="mt-2 text-sm font-bold text-stone-800">
+                    Electricidad: 10 min
+                  </p>
+
+                  <p className="mt-1 text-sm font-bold text-stone-800">
+                    Gas: 45 min
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </section>
