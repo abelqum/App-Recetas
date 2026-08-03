@@ -806,12 +806,6 @@ export default function ConfiguracionPage() {
                       por hora
                     </span>
                   </div>
-
-                  <p className="mt-2 text-xs leading-5 text-stone-500">
-                    Por ahora puedes usar $7.00 por hora como estimación para un
-                    horno doméstico de gas utilizado para galletas, roles,
-                    brownies y preparaciones similares.
-                  </p>
                 </label>
 
                 <div className="mt-5 rounded-xl border border-orange-200 bg-orange-50 p-4">
