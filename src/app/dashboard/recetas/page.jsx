@@ -32,11 +32,13 @@ function getRelatedObject(value) {
 }
 
 async function getPageData() {
-  const [recipesResult, categoriesResult] = await Promise.all([
-    supabase
-      .from("recipes")
-      .select(
-        `
+  const [recipesResult, categoriesResult, subrecipesResult] = await Promise.all(
+    [
+      // RECETAS
+      supabase
+        .from("recipes")
+        .select(
+          `
         id,
         name,
         category_id,
@@ -50,6 +52,8 @@ async function getPageData() {
         electric_time_minutes,
         gas_time_minutes,
 
+        created_at,
+
         categories (
           id,
           name
@@ -57,31 +61,83 @@ async function getPageData() {
 
         recipe_ingredients (
           id
-        ),
-
-        recipe_subrecipes!recipe_subrecipes_recipe_fk (
-          id
         )
       `,
-      )
-      .order("created_at", {
-        ascending: false,
+        )
+        .order("created_at", {
+          ascending: false,
+        }),
+
+      // CATEGORÍAS
+      supabase.from("categories").select("id, name").order("name", {
+        ascending: true,
       }),
 
-    supabase.from("categories").select("id, name").order("name"),
-  ]);
+      // SUBRECETAS, SIN HACER EMBED
+      supabase.from("recipe_subrecipes").select(`
+        id,
+        recipe_id,
+        subrecipe_id
+      `),
+    ],
+  );
+
+  // ---------------------------------------------
+  // ERRORES MOSTRADOS CORRECTAMENTE
+  // ---------------------------------------------
 
   if (recipesResult.error) {
-    console.error("Error cargando recetas:", recipesResult.error);
+    const error = recipesResult.error;
 
-    throw recipesResult.error;
+    console.error("ERROR RECETAS:");
+    console.error("message:", error.message);
+    console.error("code:", error.code);
+    console.error("details:", error.details);
+    console.error("hint:", error.hint);
+
+    throw new Error(error.message || "Error desconocido al cargar recetas.");
   }
 
   if (categoriesResult.error) {
-    console.error("Error cargando categorías:", categoriesResult.error);
+    const error = categoriesResult.error;
 
-    throw categoriesResult.error;
+    console.error("ERROR CATEGORÍAS:");
+    console.error("message:", error.message);
+    console.error("code:", error.code);
+    console.error("details:", error.details);
+    console.error("hint:", error.hint);
+
+    throw new Error(error.message || "Error desconocido al cargar categorías.");
   }
+
+  if (subrecipesResult.error) {
+    const error = subrecipesResult.error;
+
+    console.error("ERROR SUBRECETAS:");
+    console.error("message:", error.message);
+    console.error("code:", error.code);
+    console.error("details:", error.details);
+    console.error("hint:", error.hint);
+
+    throw new Error(error.message || "Error desconocido al cargar subrecetas.");
+  }
+
+  // ---------------------------------------------
+  // CONTAR CUÁNTAS SUBRECETAS USA CADA RECETA
+  // ---------------------------------------------
+
+  const subrecipeCountMap = {};
+
+  for (const relation of subrecipesResult.data ?? []) {
+    const parentRecipeId = relation.recipe_id;
+
+    subrecipeCountMap[parentRecipeId] =
+      (subrecipeCountMap[parentRecipeId] ?? 0) + 1;
+  }
+
+  // ---------------------------------------------
+  // OBTENER EL COSTEO DE CADA RECETA
+  // ---------------------------------------------
 
   const recipes = await Promise.all(
     (recipesResult.data ?? []).map(async (recipe) => {
@@ -90,13 +146,24 @@ async function getPageData() {
       });
 
       if (error) {
-        console.error(`Error calculando receta ${recipe.name}:`, error);
+        console.error(`ERROR CALCULANDO "${recipe.name}":`);
 
-        throw error;
+        console.error("message:", error.message);
+        console.error("code:", error.code);
+        console.error("details:", error.details);
+        console.error("hint:", error.hint);
+
+        throw new Error(
+          error.message || `No se pudo calcular la receta ${recipe.name}.`,
+        );
       }
 
       return {
         ...recipe,
+
+        // Número de recetas que esta receta utiliza como ingrediente
+        subrecipe_count: subrecipeCountMap[recipe.id] ?? 0,
+
         breakdown: data ?? {},
       };
     }),
