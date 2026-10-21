@@ -1,0 +1,88 @@
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    # Todos los días a las 08:17, hora de Ciudad de México (UTC-6).
+    # GitHub interpreta este horario en UTC.
+    - cron: "17 14 * * *"
+
+  # Permite ejecutar una prueba manual desde GitHub.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keep-alive:
+    name: Consultar Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Validar secretos
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [[ -z "$SUPABASE_URL" ]]; then
+            echo "::error::Falta configurar el secreto SUPABASE_URL."
+            exit 1
+          fi
+
+          if [[ -z "$SUPABASE_ANON_KEY" ]]; then
+            echo "::error::Falta configurar el secreto SUPABASE_ANON_KEY."
+            exit 1
+          fi
+
+          if [[ ! "$SUPABASE_URL" =~ ^https://[a-zA-Z0-9.-]+$ ]]; then
+            echo "::error::SUPABASE_URL no tiene un formato válido."
+            exit 1
+          fi
+
+          echo "Los secretos necesarios están configurados."
+
+      - name: Ejecutar consulta de actividad
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          status_code="$(
+            curl \
+              --silent \
+              --show-error \
+              --output "$response_file" \
+              --write-out "%{http_code}" \
+              --request POST \
+              --url "${SUPABASE_URL}/rest/v1/rpc/keep_alive" \
+              --header "apikey: ${SUPABASE_ANON_KEY}" \
+              --header "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+              --header "Content-Type: application/json" \
+              --data '{}' \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --retry 2 \
+              --retry-delay 3 \
+              --retry-all-errors
+          )"
+
+          if [[ "$status_code" != "200" ]]; then
+            echo "::error::Supabase respondió HTTP ${status_code}."
+            echo "Respuesta de error:"
+            cat "$response_file"
+            exit 1
+          fi
+
+          if [[ "$(tr -d '[:space:]' < "$response_file")" != "1" ]]; then
+            echo "::error::La función respondió, pero el resultado no fue el esperado."
+            exit 1
+          fi
+
+          echo "Consulta completada correctamente."
+          echo "Supabase respondió HTTP 200 y devolvió 1."
